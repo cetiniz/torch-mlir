@@ -1338,6 +1338,89 @@ public:
 };
 } // namespace
 
+namespace {
+class ConvertAtenSplitTensorOp
+    : public OpConversionPattern<AtenSplitTensorOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(AtenSplitTensorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    if (failed(verifyLinalgCompatibleTypes(op, rewriter)))
+      return failure();
+
+    Location loc = op.getLoc();
+    TypeConverter *typeConverter = getTypeConverter();
+
+    auto input = adaptor.getSelf();
+
+    RankedTensorType inputType =
+        input.getType().template cast<RankedTensorType>();
+
+    SmallVector<Value> results;
+    if (!getListConstructElements(op.getResult(), results)) {
+      return rewriter.notifyMatchFailure(
+          op, "unimplemented: the results are not in a torch list");
+    }
+    RankedTensorType resultType =
+        typeConverter->convertType(results[0].getType())
+            .cast<RankedTensorType>();
+
+    // Get dim
+    int64_t dim;
+    if (!matchPattern(op.getDim(), m_TorchConstantInt(&dim)))
+      return rewriter.notifyMatchFailure(op, "unimplemented: dim is not constant");
+
+    // Get split size
+    int64_t splitSize;
+    if (!matchPattern(op.getSplitSize(), m_TorchConstantInt(&splitSize)))
+      return rewriter.notifyMatchFailure(op, "unimplemented: split_size is not constant");
+
+    int64_t numSplits = inputType.getShape()[dim] / splitSize;
+    int64_t splitRemainderLength = inputType.getShape()[dim] % splitSize;
+
+    SmallVector<Value> splits;
+
+    // Extract tensor from each split
+    for (int i = 0; i < numSplits; ++i) {
+        mlir::Value emptyOp = rewriter.create<tensor::EmptyOp>(
+            loc, resultType.getShape(), resultType.getElementType());
+        SmallVector<int64_t> offsets(resultType.getRank(), 0);
+        offsets[dim] = i*splitSize;
+        SmallVector<int64_t> sizes(resultType.getShape());
+        sizes[dim] = splitSize;
+        SmallVector<int64_t> strides(resultType.getRank(), 1);
+        mlir::Value outputTensor = 
+            rewriter.create<tensor::ExtractSliceOp>(loc, resultType, emptyOp, ValueRange{}, ValueRange{}, ValueRange{}, offsets, sizes, strides);
+        splits.push_back(outputTensor);
+    }
+
+    // Add the remaining split
+    if (splitRemainderLength) {
+        RankedTensorType remainingResultType =
+            typeConverter->convertType(results[numSplits].getType())
+                .cast<RankedTensorType>();
+        mlir::Value emptyOp = rewriter.create<tensor::EmptyOp>(
+            loc, remainingResultType.getShape(), resultType.getElementType());
+        SmallVector<int64_t> offsets(resultType.getRank(), 0);
+        offsets[dim] = numSplits*splitSize;
+        SmallVector<int64_t> sizes(resultType.getShape());
+        sizes[dim] = splitRemainderLength;
+        SmallVector<int64_t> strides(resultType.getRank(), 1);
+        mlir::Value outputTensor = 
+            rewriter.create<tensor::ExtractSliceOp>(loc, remainingResultType, emptyOp, ValueRange{}, ValueRange{}, ValueRange{}, offsets, sizes, strides);
+        splits.push_back(outputTensor);
+    }
+
+    // Replace original op
+    rewriter.replaceOp(op, ValueRange(splits));
+
+    return success();
+  }
+};
+}
+
 void mlir::torch::torch_to_linalg::populateDataMovementPatternsAndLegality(
     TypeConverter &typeConverter, RewritePatternSet &patterns,
     ConversionTarget &target) {
@@ -1346,6 +1429,8 @@ void mlir::torch::torch_to_linalg::populateDataMovementPatternsAndLegality(
   patterns.add<ConvertAtenFlattenUsingIntsOp>(typeConverter, context);
   target.addIllegalOp<AtenViewOp>();
   patterns.add<ConvertAtenViewOp>(typeConverter, context);
+  target.addIllegalOp<AtenSplitTensorOp>();
+  patterns.add<ConvertAtenSplitTensorOp>(typeConverter, context);
   target.addIllegalOp<AtenSqueezeOp>();
   patterns.add<ConvertAtenSqueezeOp>(typeConverter, context);
   target.addIllegalOp<AtenSqueezeDimOp>();

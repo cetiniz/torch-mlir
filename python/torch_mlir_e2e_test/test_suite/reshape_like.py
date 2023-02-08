@@ -711,3 +711,22 @@ class ReshapeAliasCollapseModule(torch.nn.Module):
 @register_test_case(module_factory=lambda: ReshapeAliasCollapseModule())
 def ReshapeAliasCollapseModule_basic(module, tu: TestUtils):
     module.forward(tu.rand(2, 4))
+
+# ==============================================================================
+
+class SplitTensorModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    @export
+    @annotate_args([
+        None,
+        ([-1, -1], torch.float32, True),
+    ])
+
+    def forward(self, a):
+        return torch.ops.aten.split.Tensor(a, 3, dim=1)
+
+@register_test_case(module_factory=lambda: SplitTensorModule())
+def SplitTensorModule_basic(module, tu: TestUtils):
+    module.forward(tu.rand(2, 3))

@@ -459,6 +459,19 @@ def aten〇broadcast_to〡shape(self: List[int], size: List[int]) -> List[int]:
 def aten〇view〡shape(self: List[int], size: List[int]) -> List[int]:
     return upstream_shape_functions.view(self, size)
 
+def aten〇split〇Tensor〡shape(self: List[int], split_size: int, dim: int = 0) -> List[List[int]]:
+    splits: List[List[int]] = []
+    if self[dim] % split_size == 0:
+        num_splits = self[dim] // split_size
+        splits = [self[:dim]+[split_size]+self[dim+1:] for x in range(num_splits)]
+    else:
+        num_splits = self[dim] // split_size
+        remainder_split_size = self[dim] - (num_splits*split_size)
+        splits = [self[:dim]+[split_size]+self[dim+1:] for x in range(num_splits)]
+
+        splits.append(self[:dim]+[remainder_split_size]+self[dim+1:])
+    return splits
+
 def aten〇reshape〡shape(self: List[int], shape: List[int]) -> List[int]:
     return upstream_shape_functions.view(self, shape)
 
